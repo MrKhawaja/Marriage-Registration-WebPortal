@@ -96,18 +96,17 @@ app.post('/marry/request', (req, res) => {
         if (err) return res.status(403).send("Invalid Token");
         const sender = token.nid.toString();
         const reciever = req.body.reciever;
-        console.log(sender,reciever)
         db.query("select nid from users where nid = ?", [reciever], (err, result) => {
             if (err) throw err
             if (result.length === 0) {
                 return res.status(400).send("User not found")
             }
-            db.query("select nid1,nid2 from marriages where nid1 = ? or nid2 = ?", [sender,sender], (err, result) => {
+            db.query("select nid1,nid2 from marriages where (nid1 = ? or nid2 = ?) or (nid1 = ? or nid2 = ?)", [sender,sender,reciever,reciever], (err, result) => {
                 if (err) throw err
                 if (result.length > 0) {
                     result.forEach(element => {
                         if (element.status === 'active') {
-                            return res.status(400).send("You are already married")
+                            return res.status(400).send("Married person may not marry again")
                         }
                     });
                 }
@@ -126,7 +125,43 @@ app.post('/marry/request', (req, res) => {
     })
 })
 
+app.get('/marry/requests', (req, res) => {
 
+    const token = req.header('token')
+
+    jwt.verify(token, jwt_secret, (err, token) => {
+        if (err) return res.status(403).send("Invalid Token");
+        const nid = token.nid.toString();
+        db.query("select requests.sender_nid,requests.reciever_nid,requests.date,users.name from requests right join users on requests.reciever_nid = users.nid where requests.reciever_nid = ? order by date desc", [nid], (err, result) => {
+            if (err) throw err
+            res.status(200).send(result)
+        })
+    })
+
+})
+
+
+app.post('/marry/accept', (req, res) => {
+    const token = req.header('token')
+    jwt.verify(token, jwt_secret, (err, token) => {
+        if (err) return res.status(403).send("Invalid Token");
+        const nid = token.nid.toString();
+        const sender = req.body.sender;
+        db.query("select sender_nid,reciever_nid from requests where sender_nid = ? and reciever_nid = ?", [sender,nid], (err, result) => {
+            if (err) throw err
+            if (result.length === 0) {
+                return res.status(400).send("Request not found")
+            }
+            db.query("insert into marriages (nid1,nid2,date,status) values (?,?,?,?)", [sender,nid,new Date(),'active'], (err, result) => {
+                if (err) throw err
+                db.query("delete from requests where sender_nid = ? and reciever_nid = ?", [sender,nid], (err, result) => {
+                    if (err) throw err
+                    res.status(200).send("Request Accepted")
+                })
+            })
+        })
+    })
+})
 
 
 
