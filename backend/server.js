@@ -21,18 +21,22 @@ const db = mysql.createConnection({
 db.connect((err) => {
     if (err) throw err
     console.log('Connected to database')
-    db.query('create table if not exists users (nid bigint primary key, name varchar(255), email varchar(255), password varchar(255))', (err, result) => {
+    db.query('create table if not exists users (nid bigint not null primary key, name varchar(255) not null, email varchar(255), password varchar(255) not null, is_admin boolean default false, is_male boolean not null);', (err, result) => {
         if (err) throw err
         console.log('Users Table Initialized')
     })
-    db.query("create table if not exists marriages (nid1 bigint, nid2 bigint, date date, primary key(nid1,nid2), status enum('active','divorced'))", (err, result) => {
+    db.query("create table if not exists marriages (id bigint primary key auto_increment, husband bigint not null, wife bigint not null , date datetime DEFAULT now() , status enum('active','divorced','unapproved') default 'unapproved', approved_by bigint null, foreign key (husband) references users(nid), foreign key (wife) references users(nid), foreign key (approved_by) references users(nid));", (err, result) => {
         if (err) throw err
         console.log('Marriages Table Initialized')
     })
 
-    db.query("create table if not exists requests (sender_nid bigint, reciever_nid bigint, date date, primary key(sender_nid,reciever_nid))", (err, result) => {
+    db.query("create table if not exists requests (sender_nid bigint not null , reciever_nid bigint not null , date datetime default now(), primary key(sender_nid,reciever_nid), foreign key (sender_nid) references users(nid), foreign key (reciever_nid) references users(nid));", (err, result) => {
         if (err) throw err
         console.log('Requests Table Initialized')
+    })
+    db.query("create table if not exists payments (marriage_id bigint not null, id int primary key auto_increment, date datetime default now(), status enum('pending','completed','canceled') default 'pending', amount int not null, reason varchar(500) not null, foreign key (marriage_id) references marriages(id));", (err, result) => {
+        if (err) throw err
+        console.log('Payments Table Initialized')
     })
 
 })
@@ -43,6 +47,7 @@ app.post('/auth/register', (req, res) => {
     const email = req.body.email.toLowerCase();
     const nid = req.body.nid;
     var password = req.body.password;
+    const isMale = req.body.isMale;
 
     db.query('select nid from users where nid = ? union select nid from users where name = ?', [nid,name], (err, result) => {
         if (err) throw err
@@ -53,8 +58,8 @@ app.post('/auth/register', (req, res) => {
         bcrypt.hash(password, 10, (err, hash) => {
             if (err) throw err
             password = hash
-            console.log(nid,name,email,password)
-            db.query('insert into users (nid,name, email, password) values (?,?,?,?)', [nid,name, email, password], (err, result) => {
+            console.log(nid,name,email,password,isMale)
+            db.query('insert into users (nid,name, email, password,is_male) values (?,?,?,?,?)', [nid,name, email, password,isMale], (err, result) => {
                 if (err) throw err
                 res.status(200).send("User Registered")
             })
@@ -76,7 +81,7 @@ app.post('/auth/login', (req, res) => {
         bcrypt.compare(password, result[0].password, (err, response) => {
             if (err) throw err
             if (response) {
-                const token = jwt.sign({ nid: result[0].nid,name:name,email:result[0].email }, jwt_secret)
+                const token = jwt.sign({ nid: result[0].nid,name:name,email:result[0].email,isMale:result[0].is_male }, jwt_secret)
                 return res.status(200).send(token)
             }
             else {
@@ -96,12 +101,25 @@ app.post('/marry/request', (req, res) => {
         if (err) return res.status(403).send("Invalid Token");
         const sender = token.nid.toString();
         const reciever = req.body.reciever;
-        db.query("select nid from users where nid = ?", [reciever], (err, result) => {
+
+        db.query("select nid,is_male from users where nid = ?", [reciever], (err, result) => {
             if (err) throw err
             if (result.length === 0) {
                 return res.status(400).send("User not found")
             }
-            db.query("select nid1,nid2 from marriages where (nid1 = ? or nid2 = ?) or (nid1 = ? or nid2 = ?)", [sender,sender,reciever,reciever], (err, result) => {
+            if (result[0].is_male == token.isMale) {
+                return res.status(400).send('No Gay Marriage')
+            }
+            if (result[0].nid == sender) {
+                return res.status(400).send('You cannot marry yourself')
+            }
+            var husband = sender;
+            var wife = reciever;
+            if (!token.isMale) {
+                husband = reciever;
+                wife = sender;
+            }
+            db.query("select husband,wife from marriages where (husband = ? or wife = ?)", [husband,wife], (err, result) => {
                 if (err) throw err
                 if (result.length > 0) {
                     result.forEach(element => {
@@ -115,7 +133,7 @@ app.post('/marry/request', (req, res) => {
                     if (result.length > 0) {
                         return res.status(400).send("Request already existd")
                     }
-                    db.query("insert into requests (sender_nid,reciever_nid,date) values (?,?,?)", [sender,reciever,new Date()], (err, result) => {
+                    db.query("insert into requests (sender_nid,reciever_nid) values (?,?)", [sender,reciever], (err, result) => {
                         if (err) throw err
                         res.status(200).send("Request Sent")
                     })
@@ -136,6 +154,7 @@ app.get('/marry/requests', (req, res) => {
             if (err) throw err
             res.status(200).send(result)
         })
+
     })
 
 })
@@ -152,7 +171,7 @@ app.post('/marry/accept', (req, res) => {
             if (result.length === 0) {
                 return res.status(400).send("Request not found")
             }
-            db.query("insert into marriages (nid1,nid2,date,status) values (?,?,?,?)", [sender,nid,new Date(),'active'], (err, result) => {
+            db.query("insert into marriages (nid1,nid2,status) values (?,?,?)", [sender,nid,'unapproved'], (err, result) => {
                 if (err) throw err
                 db.query("delete from requests where sender_nid = ? and reciever_nid = ?", [sender,nid], (err, result) => {
                     if (err) throw err
@@ -164,6 +183,49 @@ app.post('/marry/accept', (req, res) => {
 })
 
 
+app.get('/marry/requests/:nid', (req, res) => {
+    
+    const token = req.header('token')
+
+    jwt.verify(token, jwt_secret, (err, token) => {
+        if (err) return res.status(403).send("Invalid Token");
+        const nid = req.params.toString();
+        db.query("select requests.sender_nid,requests.reciever_nid,requests.date,users.name,users.email from requests right join users on requests.sender_nid = users.nid where requests.sender_nid = ? order by date desc", [nid], (err, result) => {
+            if (err) throw err
+            res.status(200).send(result)
+        })
+
+    })
+    
+
+})
+
+app.get('/admin/approve', (req, res) => {
+    const token = req.header('token')
+    jwt.verify(token, jwt_secret, (err, token) => {
+        if (err) return res.status(403).send("Invalid Token");
+        if (!token.admin) return res.status(403).send("Not Admin");
+        db.query("select nid1,nid2 from marriages where status = 'unapproved'", (err, result) => {
+            if (err) throw err
+            res.status(200).send(result)
+        }
+        )
+    })
+})
+
+app.post('/admin/approve:nids', (req, res) => {
+    const token = req.header('token')
+    jwt.verify(token, jwt_secret, (err, token) => {
+        if (err) return res.status(403).send("Invalid Token");
+        if (!token.admin) return res.status(403).send("Not Admin");
+        const nids = req.params.nids.split('-');
+        db.query("update marriages set status = 'active' where nid1 = ? and nid2 = ?", [nids[0],nids[1]], (err, result) => {
+            if (err) throw err
+            res.status(200).send("Approved")
+        }
+        )
+    })
+})
 
 
 
