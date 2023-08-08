@@ -3,9 +3,10 @@ const app = express();
 const mysql = require("mysql");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const port = 3000;
+const port = 3001;
 const jwt_secret = "secret";
-
+var cors = require("cors");
+app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 
 const db = mysql.createConnection({
@@ -28,7 +29,7 @@ db.connect((err) => {
         (err, result) => {
           if (err) throw err;
           console.log("Marriages Table Initialized");
-          
+
           db.query(
             "create table if not exists requests (sender_nid bigint not null , reciever_nid bigint not null , date datetime default now(), primary key(sender_nid,reciever_nid), foreign key (sender_nid) references users(nid), foreign key (reciever_nid) references users(nid));",
             (err, result) => {
@@ -40,21 +41,21 @@ db.connect((err) => {
                   if (err) throw err;
                   console.log("Payments Table Initialized");
                 }
-                );
-              }
               );
             }
-            );
-              }
-            );
-              });
+          );
+        }
+      );
+    }
+  );
+});
 
 app.post("/auth/register", (req, res) => {
   const name = req.body.name.toLowerCase();
   const email = req.body.email.toLowerCase();
   const nid = req.body.nid;
   var password = req.body.password;
-  const isMale = req.body.isMale;
+  const isMale = req.body.isMale == "true";
 
   db.query(
     "select nid from users where nid = ? union select nid from users where name = ?",
@@ -74,7 +75,17 @@ app.post("/auth/register", (req, res) => {
           [nid, name, email, password, isMale],
           (err, result) => {
             if (err) throw err;
-            res.status(200).send("User Registered");
+            const token = jwt.sign(
+              {
+                nid,
+                name,
+                email,
+                isMale,
+                isAdmin: false,
+              },
+              jwt_secret
+            );
+            res.status(200).send(token);
           }
         );
       });
@@ -83,9 +94,9 @@ app.post("/auth/register", (req, res) => {
 });
 
 app.post("/auth/login", (req, res) => {
-  const name = req.body.name.toLowerCase();
+  const nid = req.body.nid;
   const password = req.body.password;
-  db.query("select * from users where name = ?", [name], (err, result) => {
+  db.query("select * from users where nid = ?", [nid], (err, result) => {
     if (err) throw err;
     if (result.length === 0) {
       return res.status(400).send("User not found");
@@ -96,10 +107,10 @@ app.post("/auth/login", (req, res) => {
         const token = jwt.sign(
           {
             nid: result[0].nid,
-            name: name,
+            name: result[0].name,
             email: result[0].email,
             isMale: result[0].is_male,
-            isAdmin: result[0].is_admin
+            isAdmin: result[0].is_admin,
           },
           jwt_secret
         );
@@ -116,15 +127,19 @@ app.get("/marry/user:nid", (req, res) => {
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
     const nid = req.params.nid;
-    db.query("select nid,name from users where nid = ?", [nid], (err, result) => {
-      if (err) throw err;
-      if (result.length === 0) {
-        return res.status(400).send("User not found");
+    db.query(
+      "select nid,name from users where nid = ?",
+      [nid],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res.status(400).send("User not found");
+        }
+        return res.status(200).send(result[0]);
       }
-      return res.status(200).send(result[0]);
-    });
+    );
   });
-})
+});
 
 app.post("/marry/request", (req, res) => {
   const token = req.header("token");
@@ -297,128 +312,139 @@ app.post("/admin/approve:id", (req, res) => {
     if (err) return res.status(403).send("Invalid Token");
     if (!token.isAdmin) return res.status(403).send("Not Admin");
     const id = req.params.id;
-    db.query('select * from marriages where id = ?',[id],(err,result)=>{
-        if(err) throw err;
-        if(result.length === 0){
-            return res.status(400).send("Marriage not found");
-        }
-        
-        db.query(
+    db.query("select * from marriages where id = ?", [id], (err, result) => {
+      if (err) throw err;
+      if (result.length === 0) {
+        return res.status(400).send("Marriage not found");
+      }
+
+      db.query(
         "update marriages set status = 'active' where id = ?",
         [id],
         (err, result) => {
-            if (err) throw err;
-            const link = "https://developer.bka.sh/reference/createpaymentusingpost"
-            db.query("insert into payments (marriage_id,amount,reason,payment_link) values (?,?,?,?)",[id,10000,"Marriage Registration Fee",link],(err,result)=>{
-                if(err) throw err;
-                res.status(200).send("Approved");
-            })
+          if (err) throw err;
+          const link =
+            "https://developer.bka.sh/reference/createpaymentusingpost";
+          db.query(
+            "insert into payments (marriage_id,amount,reason,payment_link) values (?,?,?,?)",
+            [id, 10000, "Marriage Registration Fee", link],
+            (err, result) => {
+              if (err) throw err;
+              res.status(200).send("Approved");
+            }
+          );
         }
-        );
+      );
     });
   });
 });
 
 app.post("/admin/reject:id", (req, res) => {
-    const token = req.header("token");
-    jwt.verify(token, jwt_secret, (err, token) => {
-        if (err) return res.status(403).send("Invalid Token");
-        if (!token.isAdmin) return res.status(403).send("Not Admin");
-        const id = req.params.id;
-        db.query('select * from marriages where id = ?',[id],(err,result)=>{
-            if(err) throw err;
-            if(result.length === 0){
-                return res.status(400).send("Marriage not found");
-            }
-            
-            db.query(
-            "update marriages set status = 'rejected' where id = ?",
-            [id],
-            (err, result) => {
-                if (err) throw err;
-                res.status(200).send("Marriage Rejected");
-            }
-            );
-        });
-    });
-    }
-);
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    if (!token.isAdmin) return res.status(403).send("Not Admin");
+    const id = req.params.id;
+    db.query("select * from marriages where id = ?", [id], (err, result) => {
+      if (err) throw err;
+      if (result.length === 0) {
+        return res.status(400).send("Marriage not found");
+      }
 
-app.post('/admin/divorce:id',(req,res)=>{
-    const token = req.header("token")
-    jwt.verify(token,jwt_secret,(err,token)=>{
-      if (err) return res.status(403).send("Invalid Token");
-      if (!token.isAdmin) return res.status(403).send("Not Admin");
-      const id = req.params.id;
-      db.query('select * from marriages where id = ?',[id],(err,result)=>{
-        if(err) throw err;
-        if(result.length === 0){
-            return res.status(400).send("Marriage not found");
+      db.query(
+        "update marriages set status = 'rejected' where id = ?",
+        [id],
+        (err, result) => {
+          if (err) throw err;
+          res.status(200).send("Marriage Rejected");
         }
-        db.query('update marriages set status = "divorced" where id = ?',[id],(err,result)=>{
-            if(err) throw err;
-            res.status(200).send("Divorced");
-        })
-      })
-})})
+      );
+    });
+  });
+});
 
+app.post("/admin/divorce:id", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    if (!token.isAdmin) return res.status(403).send("Not Admin");
+    const id = req.params.id;
+    db.query("select * from marriages where id = ?", [id], (err, result) => {
+      if (err) throw err;
+      if (result.length === 0) {
+        return res.status(400).send("Marriage not found");
+      }
+      db.query(
+        'update marriages set status = "divorced" where id = ?',
+        [id],
+        (err, result) => {
+          if (err) throw err;
+          res.status(200).send("Divorced");
+        }
+      );
+    });
+  });
+});
 
-app.get('/admin/marriages',(req,res)=>{
-    const token = req.header("token")
-    jwt.verify(token,jwt_secret,(err,token)=>{
-      if (err) return res.status(403).send("Invalid Token");
-      if (!token.isAdmin) return res.status(403).send("Not Admin");
-      db.query('select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid',(err,result)=>{
-        if(err) throw err;
+app.get("/admin/marriages", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    if (!token.isAdmin) return res.status(403).send("Not Admin");
+    db.query(
+      "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid",
+      (err, result) => {
+        if (err) throw err;
         res.status(200).send(result);
-      })
-    })
-})
+      }
+    );
+  });
+});
 
-
-app.get('/marriages',(req,res)=>{
-    const token = req.header("token");
-    jwt.verify(token, jwt_secret, (err, token) => {
-        if (err) return res.status(403).send("Invalid Token");
-        const nid = token.nid.toString();
-        if (token.isMale){
-            db.query('select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name,payments.id as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid inner join payments.marriage_id = marriages.id where marriages.husband = ?',[nid],(err,result)=>{
-                if(err) throw err;
-                res.status(200).send(result);
-            })
-        }else{
-            db.query('select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.wife = ?',[nid],(err,result)=>{
-                if(err) throw err;
-                res.status(200).send(result);
-            })
+app.get("/marriages", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    const nid = token.nid.toString();
+    if (token.isMale) {
+      db.query(
+        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name,payments.id as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid inner join payments.marriage_id = marriages.id where marriages.husband = ?",
+        [nid],
+        (err, result) => {
+          if (err) throw err;
+          res.status(200).send(result);
         }
-    });
-}
-)
+      );
+    } else {
+      db.query(
+        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.wife = ?",
+        [nid],
+        (err, result) => {
+          if (err) throw err;
+          res.status(200).send(result);
+        }
+      );
+    }
+  });
+});
 
-
-app.get('/marriages:id/payments',(req,res)=>{
-    const token = req.header("token");
-    jwt.verify(token, jwt_secret, (err, token) => {
-        if (err) return res.status(403).send("Invalid Token");
-        if (!token.isMale) return res.status(400).send("Only Husband can pay");
-        const nid = token.nid.toString();
-        const id = req.params.id;
-        db.query("select payments.id,payments.date, payments.marriage_id, payments.status, payments.amount, payments.reason,payments.payment_link from marriages inner join payments on payments.marriage_id = ? where husband = ?",[id,nid],(err,result)=>{
-            if (err) throw err;
-            res.status(200).send(result);
-        })
-    });
-})
-
-
-
-
-
-
-
-
-
+app.get("/marriages:id/payments", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    if (!token.isMale) return res.status(400).send("Only Husband can pay");
+    const nid = token.nid.toString();
+    const id = req.params.id;
+    db.query(
+      "select payments.id,payments.date, payments.marriage_id, payments.status, payments.amount, payments.reason,payments.payment_link from marriages inner join payments on payments.marriage_id = ? where husband = ?",
+      [id, nid],
+      (err, result) => {
+        if (err) throw err;
+        res.status(200).send(result);
+      }
+    );
+  });
+});
 
 app.listen(port, () => {
   console.log(`Example app listening at http://localhost:${port}`);
