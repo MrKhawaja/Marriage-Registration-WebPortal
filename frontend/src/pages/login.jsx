@@ -19,13 +19,13 @@ import baseURL from "../config";
 import { Formik } from "formik";
 import { Navigate, useNavigate } from "react-router-dom";
 
-const Login = ({ loadUser, user }) => {
+const Login = ({ loadUser, user, isLoading }) => {
   const [submitError, setSubmitError] = useState(false);
 
   const navigate = useNavigate();
   return (
     <>
-      {user && <Navigate to="/dashboard" />}
+      {!isLoading && user && <Navigate to="/" />}
       <div className="centered-container">
         <Card width="300px" padding="20px">
           <Formik

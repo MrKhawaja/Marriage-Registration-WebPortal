@@ -20,12 +20,13 @@ import axios from "axios";
 import qs from "qs";
 import baseURL from "../config";
 import { Formik } from "formik";
-import { Navigate } from "react-router-dom";
-const Register = ({ user, loadUser }) => {
+import { Navigate, useNavigate } from "react-router-dom";
+const Register = ({ user, loadUser, isLoading }) => {
+  const navigate = useNavigate();
   const [submitError, setSubmitError] = useState(false);
   return (
     <>
-      {user && <Navigate to="/dashboard" />}
+      {!isLoading && user && <Navigate to="/" />}
 
       <div className="centered-container">
         <Card width="300px" padding="20px">
@@ -183,7 +184,13 @@ const Register = ({ user, loadUser }) => {
                     marginTop="10px"
                   >
                     <FormLabel>Gender</FormLabel>
-                    <RadioGroup defaultValue="male">
+                    <RadioGroup
+                      onChange={(value) => {
+                        values.gender = value;
+                      }}
+                      name="gender"
+                      defaultValue="male"
+                    >
                       <HStack spacing="24px">
                         <Radio value="male">Male</Radio>
                         <Radio value="female">Female</Radio>
@@ -201,6 +208,16 @@ const Register = ({ user, loadUser }) => {
                     type="submit"
                   >
                     Register
+                  </Button>
+                  <Button
+                    width={"100%"}
+                    onClick={() => {
+                      navigate("/login");
+                    }}
+                    marginTop="20px"
+                    colorScheme="green"
+                  >
+                    Login
                   </Button>
                 </form>
               </>

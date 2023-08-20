@@ -25,21 +25,28 @@ db.connect((err) => {
       if (err) throw err;
       console.log("Users Table Initialized");
       db.query(
-        "create table if not exists marriages (id bigint primary key auto_increment, husband bigint not null, wife bigint not null , date datetime DEFAULT now() , status enum('active','divorced','unapproved','rejected') default 'unapproved', approved_by bigint null, foreign key (husband) references users(nid), foreign key (wife) references users(nid), foreign key (approved_by) references users(nid));",
+        "create table if not exists requests (id bigint primary key auto_increment, sender_nid bigint not null , reciever_nid bigint not null , date datetime default now(), foreign key (sender_nid) references users(nid), foreign key (reciever_nid) references users(nid));",
         (err, result) => {
           if (err) throw err;
-          console.log("Marriages Table Initialized");
+          console.log("Requests Table Initialized");
 
           db.query(
-            "create table if not exists requests (sender_nid bigint not null , reciever_nid bigint not null , date datetime default now(), primary key(sender_nid,reciever_nid), foreign key (sender_nid) references users(nid), foreign key (reciever_nid) references users(nid));",
+            "create table if not exists payments (request_id bigint, id int primary key auto_increment, date datetime default now(), status enum('pending','completed','canceled') default 'pending', amount int not null, reason varchar(500) not null, payment_link varchar(500) not null, paid_by bigint null, foreign key (request_id) references requests(id), foreign key (paid_by) references users(nid));",
             (err, result) => {
               if (err) throw err;
-              console.log("Requests Table Initialized");
+              console.log("Payments Table Initialized");
               db.query(
-                "create table if not exists payments (marriage_id bigint, id int primary key auto_increment, date datetime default now(), status enum('pending','completed','canceled') default 'pending', amount int not null, reason varchar(500) not null, payment_link varchar(500) not null, foreign key (marriage_id) references marriages(id));",
+                "create table if not exists marriages (id bigint primary key auto_increment, husband bigint not null, wife bigint not null , date datetime DEFAULT now() , status enum('active','divorced','unapproved','rejected') default 'unapproved', approved_by bigint null,payment_id int not null, foreign key (payment_id) references payments(id), foreign key (husband) references users(nid), foreign key (wife) references users(nid), foreign key (approved_by) references users(nid));",
                 (err, result) => {
                   if (err) throw err;
-                  console.log("Payments Table Initialized");
+                  console.log("Marriages Table Initialized");
+                  db.query(
+                    "create table if not exists documents (marriage_id bigint not null, document varchar(1024) not null, foreign key (marriage_id) references marriages(id));",
+                    (err, result) => {
+                      if (err) throw err;
+                      console.log("Documents Table Initialized");
+                    }
+                  );
                 }
               );
             }
@@ -55,7 +62,7 @@ app.post("/auth/register", (req, res) => {
   const email = req.body.email.toLowerCase();
   const nid = req.body.nid;
   var password = req.body.password;
-  const isMale = req.body.isMale == "true";
+  const isMale = req.body.isMale == "male";
 
   db.query(
     "select nid from users where nid = ? union select nid from users where name = ?",
@@ -126,7 +133,7 @@ app.get("/marry/user:nid", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
-    const nid = req.params.nid;
+    const nid = req.params.nid.slice(1);
     db.query(
       "select nid,name from users where nid = ?",
       [nid],
@@ -153,14 +160,14 @@ app.post("/marry/request", (req, res) => {
       [reciever],
       (err, result) => {
         if (err) throw err;
+        if (result[0].nid == sender) {
+          return res.status(400).send("You cannot marry yourself");
+        }
         if (result.length === 0) {
           return res.status(400).send("User not found");
         }
         if (result[0].is_male == token.isMale) {
           return res.status(400).send("No Gay Marriage");
-        }
-        if (result[0].nid == sender) {
-          return res.status(400).send("You cannot marry yourself");
         }
         var husband = sender;
         var wife = reciever;
@@ -207,14 +214,13 @@ app.post("/marry/request", (req, res) => {
   });
 });
 
-app.get("/marry/requests", (req, res) => {
+app.get("/marry/requests/recieved", (req, res) => {
   const token = req.header("token");
-
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
-    const nid = token.nid.toString();
+    const nid = token.nid;
     db.query(
-      "select requests.sender_nid,requests.reciever_nid,requests.date,users.name from requests inner join users on requests.sender_nid = users.nid where requests.reciever_nid = ? order by date desc",
+      "select requests.id,requests.sender_nid,requests.reciever_nid,requests.date,users.name as sender_name,payments.status as payment_status,payments.id as payment_id from requests inner join users on requests.sender_nid = users.nid left join payments on payments.request_id = requests.id where requests.reciever_nid = ? order by date desc;",
       [nid],
       (err, result) => {
         if (err) throw err;
@@ -224,66 +230,69 @@ app.get("/marry/requests", (req, res) => {
   });
 });
 
-app.post("/marry/accept", (req, res) => {
+app.post("/payments/pay", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
+    const paymentId = req.body.paymentId;
+    const requestId = req.body.id;
     if (err) return res.status(403).send("Invalid Token");
-    const nid = token.nid.toString();
-    const sender = req.body.sender;
     db.query(
-      "select sender_nid,reciever_nid from requests where sender_nid = ? and reciever_nid = ?",
-      [sender, nid],
+      "select requests.id,requests.sender_nid,requests.reciever_nid,payments.id as payment_id, payments.status from payments inner join requests on requests.id = ? where payments.id = ?",
+      [requestId, paymentId],
       (err, result) => {
         if (err) throw err;
         if (result.length === 0) {
-          return res.status(400).send("Request not found");
+          return res.status(400).send("Payment not found");
         }
-        var husband = sender;
-        var wife = reciever;
-        if (!token.isMale) {
-          husband = reciever;
-          wife = sender;
+        if (result[0].status === "completed") {
+          return res.status(400).send("Payment already completed");
         }
-        db.query(
-          "insert into marriages (husband,wife,status) values (?,?,?)",
-          [husband, wife, "unapproved"],
-          (err, result) => {
-            if (err) throw err;
-            db.query(
-              "delete from requests where sender_nid = ? and reciever_nid = ?",
-              [sender, nid],
-              (err, result) => {
-                if (err) throw err;
-                res.status(200).send("Request Accepted");
-              }
-            );
-          }
-        );
+        if (result[0].status === "canceled") {
+          return res.status(400).send("Payment canceled");
+        }
+        if (result[0].status === "pending") {
+          db.query(
+            "update payments set status = 'completed', paid_by = ? where id = ?",
+            [token.nid, paymentId],
+            (err, resu) => {
+              if (err) throw err;
+              db.query(
+                "insert into marriages (husband, wife, payment_id) values (?,?,?)",
+                [result[0].sender_nid, result[0].reciever_nid, paymentId],
+                (err, result) => {
+                  if (err) throw err;
+                  res.status(200).send("Payment Completed");
+                }
+              );
+            }
+          );
+        }
       }
     );
   });
 });
 
-app.get("/marry/requests/:nid", (req, res) => {
+app.post("/marry/accept", (req, res) => {
   const token = req.header("token");
-
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
-    const nid = req.params.toString();
+    const reciever_nid = token.nid;
+    const request_id = req.body.id;
     db.query(
-      "select sender_nid,reciever_nid from requests where sender_nid = ? and reciever_nid = ?",
-      [nid, token.nid.toString()],
+      "select id from requests where id = ? and reciever_nid = ?",
+      [request_id, reciever_nid],
       (err, result) => {
         if (err) throw err;
         if (result.length === 0) {
           return res.status(400).send("Request not found");
         }
+
         db.query(
-          "select nid,name,email from users where nid = ?",
-          [nid],
+          "insert into payments (request_id, amount, reason, payment_link) values (?,?,?,?);",
+          [request_id, 5000, "Marriage Registration Fee", "link"],
           (err, result) => {
             if (err) throw err;
-            res.status(200).send(result[0]);
+            res.status(200).send("Request Accepted");
           }
         );
       }
@@ -323,11 +332,14 @@ app.post("/admin/approve:id", (req, res) => {
         [id],
         (err, result) => {
           if (err) throw err;
-          const link =
-            "https://developer.bka.sh/reference/createpaymentusingpost";
           db.query(
-            "insert into payments (marriage_id,amount,reason,payment_link) values (?,?,?,?)",
-            [id, 10000, "Marriage Registration Fee", link],
+            "delete from requests where (sender_nid = ? and reciever_nid = ?) or (reciever_nid = ? and sender_nid = ?)",
+            [
+              result[0].husband,
+              result[0].wife,
+              result[0].husband,
+              result[0].wife,
+            ],
             (err, result) => {
               if (err) throw err;
               res.status(200).send("Approved");
@@ -405,14 +417,15 @@ app.get("/marriages", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
-    const nid = token.nid.toString();
+    const nid = token.nid;
     if (token.isMale) {
       db.query(
-        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name,payments.id as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid inner join payments.marriage_id = marriages.id where marriages.husband = ?",
+        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.husband = ?",
         [nid],
         (err, result) => {
           if (err) throw err;
           res.status(200).send(result);
+          console.log(result);
         }
       );
     } else {
@@ -425,24 +438,6 @@ app.get("/marriages", (req, res) => {
         }
       );
     }
-  });
-});
-
-app.get("/marriages:id/payments", (req, res) => {
-  const token = req.header("token");
-  jwt.verify(token, jwt_secret, (err, token) => {
-    if (err) return res.status(403).send("Invalid Token");
-    if (!token.isMale) return res.status(400).send("Only Husband can pay");
-    const nid = token.nid.toString();
-    const id = req.params.id;
-    db.query(
-      "select payments.id,payments.date, payments.marriage_id, payments.status, payments.amount, payments.reason,payments.payment_link from marriages inner join payments on payments.marriage_id = ? where husband = ?",
-      [id, nid],
-      (err, result) => {
-        if (err) throw err;
-        res.status(200).send(result);
-      }
-    );
   });
 });
 
