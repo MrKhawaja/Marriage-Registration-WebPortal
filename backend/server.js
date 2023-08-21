@@ -71,6 +71,33 @@ db.connect((err) => {
   );
 });
 
+app.get("/stats", (req, res) => {
+  var stats = { marriages: [], requests: 0, payments: [], users: 0 };
+  db.query(
+    "select count(*) as count, status from marriages group by status;",
+    (err, result) => {
+      if (err) throw err;
+      stats.marriages = result;
+      db.query("select count(*) as count from requests;", (err, result) => {
+        if (err) throw err;
+        stats.requests = result[0].count;
+        db.query(
+          "select count(*) as count,status from payments group by status;",
+          (err, result) => {
+            if (err) throw err;
+            stats.payments = result;
+            db.query("select count(*) as count from users;", (err, result) => {
+              if (err) throw err;
+              stats.users = result[0].count;
+              res.status(200).send(stats);
+            });
+          }
+        );
+      });
+    }
+  );
+});
+
 app.post("/auth/register", (req, res) => {
   const name = req.body.name.toLowerCase();
   const email = req.body.email.toLowerCase();
@@ -321,7 +348,7 @@ app.post("/documents/upload", uploads.array("files"), (req, res) => {
     const marriage_id = req.body.marriage_id;
     if (err) return res.status(403).send("Invalid Token");
     db.query(
-      "select id from marriages where id = ? and (husband = ? or wife = ?) and (status = 'unapproved' or status = 'active')",
+      "select id from marriages where id = ? and (husband = ? or wife = ?) and (status = 'unapproved' or status = 'active' or status = 'incomplete' or status = 'rejected')",
       [marriage_id, token.nid, token.nid],
       (err, result) => {
         if (err) throw err;

@@ -1,4 +1,4 @@
-import { Button, Flex, Heading } from "@chakra-ui/react";
+import { Avatar, Button, Flex, Heading } from "@chakra-ui/react";
 import React from "react";
 import SideNavLink from "./SideNavLink";
 import "./nav.css";
@@ -24,6 +24,10 @@ const SideNav = ({ user, setUser }) => {
     >
       <Heading color="white" mb={10}>
         Dashboard
+      </Heading>
+      <Avatar name={user.name} size={"xl"} />
+      <Heading fontSize={30} color="white" mt={3} mb={5}>
+        {user.name}
       </Heading>
       <SideNavLinkGroup groupName={"Profile"}>
         <SideNavLink to="/marriages" title={"Marriages"} />
