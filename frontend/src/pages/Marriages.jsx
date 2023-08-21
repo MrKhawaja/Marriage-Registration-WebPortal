@@ -15,25 +15,87 @@ import {
   Th,
   Heading,
   Button,
+  Modal,
+  useDisclosure,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalFooter,
+  ModalCloseButton,
+  ModalBody,
+  FormControl,
+  Input,
 } from "@chakra-ui/react";
 import axios from "axios";
 import qs from "qs";
 import baseURL from "../config";
-import { Navigate, Routes } from "react-router-dom";
+import { Link, Navigate, Routes } from "react-router-dom";
 
 const Marriages = ({ setUser, user, isLoading, token }) => {
   const [marriages, setMarriages] = useState([]);
-  const getMarriages = () => {
+  const { isOpen, onOpen, onClose } = useDisclosure();
+  const [documents, setDocuments] = useState(false);
+  const [modal, setModal] = useState(false);
+  const [files, setFiles] = useState(false);
+  const loadDocuments = (id) => {
     axios
-      .get(baseURL + "/marriages", { headers: { token: token } })
+      .get(baseURL + "/documents/" + id, { headers: { token: token } })
       .then((res) => {
-        setMarriages(res.data);
-        console.log(res.data);
+        setDocuments(res.data);
       })
       .catch((err) => {
         console.log(err);
       });
   };
+  const getMarriages = () => {
+    axios
+      .get(baseURL + "/marriages", { headers: { token: token } })
+      .then((res) => {
+        setMarriages(res.data);
+      })
+      .catch((err) => {
+        console.log(err);
+      });
+  };
+  const handleUpload = (e) => {
+    e.preventDefault();
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      formData.append("files", files[i]);
+    }
+    formData.append("marriage_id", modal);
+    axios
+      .post(baseURL + "/documents/upload", formData, {
+        headers: { token: token },
+      })
+      .then((res) => {
+        setModal(false);
+        onClose();
+        getMarriages();
+      })
+      .catch((err) => {
+        console.log(err);
+      });
+  };
+
+  const handleDelete = () => {
+    axios
+      .post(
+        baseURL + "/documents/delete",
+        qs.stringify({ marriage_id: modal }),
+        { headers: { token: token } }
+      )
+      .then((res) => {
+        setModal(false);
+        onClose();
+        setDocuments(false);
+        getMarriages();
+      })
+      .catch((err) => {
+        console.log(err);
+      });
+  };
+
   useEffect(() => {
     if (!token) return;
     getMarriages();
@@ -72,8 +134,7 @@ const Marriages = ({ setUser, user, isLoading, token }) => {
                   <Th>NID of Husband</Th>
                   <Th>Name of Wife</Th>
                   <Th>NID of Wife</Th>
-                  <Th>Current Status Of Marriage</Th>
-                  <Th>Date Created</Th>
+                  <Th>Status</Th>
                   <Th></Th>
                 </Tr>
               </Thead>
@@ -85,7 +146,19 @@ const Marriages = ({ setUser, user, isLoading, token }) => {
                     <Td>{marriage.wife_name}</Td>
                     <Td>{marriage.wife}</Td>
                     <Td>{marriage.status}</Td>
-                    <Td>{marriage.date}</Td>
+                    <Td>
+                      {marriage.status != "divorced" && (
+                        <Button
+                          onClick={(e) => {
+                            setModal(marriage.id);
+                            onOpen(e);
+                            loadDocuments(marriage.id);
+                          }}
+                        >
+                          Upload Documents
+                        </Button>
+                      )}
+                    </Td>
                   </Tr>
                 ))}
               </Tbody>
@@ -93,6 +166,70 @@ const Marriages = ({ setUser, user, isLoading, token }) => {
           </TableContainer>
         </Box>
       </Flex>
+      <Modal
+        isOpen={isOpen}
+        onClose={(e) => {
+          setModal(false);
+          setDocuments(false);
+          onClose(e);
+        }}
+      >
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Upload Documents</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            {documents && "Already Uploaded Documents:"}
+            {documents &&
+              documents.map((document) => (
+                <Button
+                  mt={3}
+                  key={document.name}
+                  onClick={() => {
+                    window.location.href =
+                      baseURL + "/uploads/" + document.name;
+                  }}
+                >
+                  {document.name}
+                </Button>
+              ))}
+            <form onSubmit={handleUpload}>
+              <FormControl mt={3}>
+                <Input
+                  padding={3}
+                  height={"auto"}
+                  accept="application/pdf"
+                  onChange={(e) => {
+                    setFiles(e.target.files);
+                  }}
+                  type="file"
+                  multiple
+                />
+              </FormControl>
+              <Button mt={3} type="submit">
+                Upload
+              </Button>
+            </form>
+          </ModalBody>
+
+          <ModalFooter>
+            <Button
+              colorScheme="blue"
+              mr={3}
+              onClick={(e) => {
+                setModal(false);
+                setDocuments(false);
+                onClose(e);
+              }}
+            >
+              Close
+            </Button>
+            <Button onClick={handleDelete} colorScheme="red">
+              Delete All Documents
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </>
   );
 };

@@ -32,6 +32,12 @@ const SideNav = ({ user, setUser }) => {
         <SideNavLink to="/request/send" title={"Send Request"} />
         <SideNavLink to="/request/recieved" title={"Recieved Requests"} />
       </SideNavLinkGroup>
+      {user && user.isAdmin && (
+        <SideNavLinkGroup groupName={"Admin"}>
+          <SideNavLink to="/admin/approve" title={"Approve Marriages"} />
+          <SideNavLink to="/admin/divorce" title={"Divorce Marriages"} />
+        </SideNavLinkGroup>
+      )}
       <Button onClick={logout} colorScheme="red" mt={10} width={"90%"}>
         Logout
       </Button>

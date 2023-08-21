@@ -110,15 +110,14 @@ const RecievedRequests = ({ setUser, user, isLoading, token }) => {
 
                     <Td>{request.date}</Td>
                     <Td>
-                      {!request.payment_status && (
+                      {!request.payment_status ? (
                         <Button
                           colorScheme="twitter"
                           onClick={() => handleAccept(request.id)}
                         >
                           Accept Request
                         </Button>
-                      )}
-                      {request.payment_status == "pending" ? (
+                      ) : request.payment_status == "pending" ? (
                         <Button
                           width={"100%"}
                           colorScheme="whatsapp"

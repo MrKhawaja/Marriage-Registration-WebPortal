@@ -6,12 +6,13 @@ import jwt_decode from "jwt-decode";
 
 import Login from "./pages/login";
 import Register from "./pages/register";
-import Admin from "./pages/admin";
+import AdminApprove from "./pages/AdminApprove";
 import Index from "./pages/index";
 import Dashboard from "./pages/dashboard";
 import SendRequest from "./pages/SendRequest";
 import RecievedRequests from "./pages/RecievedRequests";
 import Marriages from "./pages/Marriages";
+import AdminDivorce from "./pages/AdminDivorce";
 
 const App = () => {
   const [user, setUser] = useState(false);
@@ -54,7 +55,32 @@ const App = () => {
           <Register isLoading={isLoading} user={user} loadUser={loadUser} />
         }
       />
-      {user && user.isAdmin && <Route path="/admin" Component={Admin} />}
+      {user && user.isAdmin && (
+        <>
+          <Route
+            path="/admin/approve"
+            element={
+              <AdminApprove
+                user={user}
+                isLoading={isLoading}
+                token={token}
+                setUser={setUser}
+              />
+            }
+          />
+          <Route
+            path={"/admin/divorce"}
+            element={
+              <AdminDivorce
+                user={user}
+                isLoading={isLoading}
+                token={token}
+                setUser={setUser}
+              />
+            }
+          />
+        </>
+      )}
       <Route
         path="/request/send"
         element={

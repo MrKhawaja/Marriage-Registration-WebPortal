@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 const mysql = require("mysql");
 const bcrypt = require("bcrypt");
+const multer = require("multer");
 const jwt = require("jsonwebtoken");
 const port = 3001;
 const jwt_secret = "secret";
@@ -9,12 +10,25 @@ var cors = require("cors");
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 
+const uploads = multer({
+  storage: multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, "./uploads");
+    },
+    filename: function (req, file, cb) {
+      cb(null, file.fieldname + "-" + Date.now() + ".pdf");
+    },
+  }),
+});
+
 const db = mysql.createConnection({
   host: "localhost",
   user: "root",
   password: "password",
   database: "app",
 });
+
+app.use("/uploads", express.static(__dirname + "/uploads"));
 
 db.connect((err) => {
   if (err) throw err;
@@ -36,7 +50,7 @@ db.connect((err) => {
               if (err) throw err;
               console.log("Payments Table Initialized");
               db.query(
-                "create table if not exists marriages (id bigint primary key auto_increment, husband bigint not null, wife bigint not null , date datetime DEFAULT now() , status enum('active','divorced','unapproved','rejected') default 'unapproved', approved_by bigint null,payment_id int not null, foreign key (payment_id) references payments(id), foreign key (husband) references users(nid), foreign key (wife) references users(nid), foreign key (approved_by) references users(nid));",
+                "create table if not exists marriages (id bigint primary key auto_increment, husband bigint not null, wife bigint not null , date datetime DEFAULT now() , status enum('active','divorced','unapproved','rejected','incomplete') default 'incomplete', approved_by bigint null,payment_id int not null, foreign key (payment_id) references payments(id), foreign key (husband) references users(nid), foreign key (wife) references users(nid), foreign key (approved_by) references users(nid));",
                 (err, result) => {
                   if (err) throw err;
                   console.log("Marriages Table Initialized");
@@ -76,7 +90,6 @@ app.post("/auth/register", (req, res) => {
       bcrypt.hash(password, 10, (err, hash) => {
         if (err) throw err;
         password = hash;
-        console.log(nid, name, email, password, isMale);
         db.query(
           "insert into users (nid,name, email, password,is_male) values (?,?,?,?,?)",
           [nid, name, email, password, isMale],
@@ -181,13 +194,7 @@ app.post("/marry/request", (req, res) => {
           (err, result) => {
             if (err) throw err;
             if (result.length > 0) {
-              result.forEach((element) => {
-                if (element.status === "active") {
-                  return res
-                    .status(400)
-                    .send("Married person may not marry again");
-                }
-              });
+              return res.status(400).send("Married person may not marry again");
             }
             db.query(
               "select sender_nid,reciever_nid from requests where (sender_nid = ? and reciever_nid = ?) or (sender_nid = ? and reciever_nid = ?)",
@@ -256,9 +263,15 @@ app.post("/payments/pay", (req, res) => {
             [token.nid, paymentId],
             (err, resu) => {
               if (err) throw err;
+              var husband = result[0].sender_nid;
+              var wife = result[0].reciever_nid;
+              if (token.isMale) {
+                husband = result[0].reciever_nid;
+                wife = result[0].sender_nid;
+              }
               db.query(
                 "insert into marriages (husband, wife, payment_id) values (?,?,?)",
-                [result[0].sender_nid, result[0].reciever_nid, paymentId],
+                [husband, wife, paymentId],
                 (err, result) => {
                   if (err) throw err;
                   res.status(200).send("Payment Completed");
@@ -300,6 +313,90 @@ app.post("/marry/accept", (req, res) => {
   });
 });
 
+app.post("/documents/upload", uploads.array("files"), (req, res) => {
+  console.log(req.files);
+  console.log(req.body.marriage_id);
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    const marriage_id = req.body.marriage_id;
+    if (err) return res.status(403).send("Invalid Token");
+    db.query(
+      "select id from marriages where id = ? and (husband = ? or wife = ?) and (status = 'unapproved' or status = 'active')",
+      [marriage_id, token.nid, token.nid],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res.status(400).send("Marriage not found");
+        }
+        var query = "insert into documents (marriage_id, document) values ";
+        req.files.forEach((file) => {
+          query += `(${marriage_id},'${file.filename}'),`;
+        });
+        query = query.slice(0, -1);
+        db.query(query, (err, result) => {
+          if (err) throw err;
+
+          db.query(
+            "update marriages set status = 'unapproved' where id = ?",
+            [marriage_id],
+            (err, result) => {
+              if (err) throw err;
+              return res.status(200).send("Documents Uploaded");
+            }
+          );
+        });
+      }
+    );
+  });
+});
+
+app.post("/documents/delete", (req, res) => {
+  const token = req.header("token");
+  const marriage_id = req.body.marriage_id;
+  jwt.verify(token, jwt_secret, (err, token) => {
+    const nid = token.nid;
+    if (err) return res.status(403).send("Invalid Token");
+    db.query(
+      "select * from marriages where id = ? and (husband = ? or wife = ?) and status = 'unapproved'",
+      [marriage_id, nid, nid],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res
+            .status(400)
+            .send("You are not authorized to delete this document");
+        }
+        db.query(
+          "delete from documents where marriage_id = ?",
+          [marriage_id],
+          (err, result) => {
+            if (err) throw err;
+            return res.status(200).send("Documents Deleted");
+          }
+        );
+      }
+    );
+  });
+});
+
+app.get("/documents/:id", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    const id = req.params.id;
+    db.query(
+      "select documents.document as name from documents inner join marriages on marriages.id = documents.marriage_id where marriage_id = ? and (marriages.husband = ? or marriages.wife = ?)",
+      [id, token.nid, token.nid],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res.status(200).send(false);
+        }
+        res.status(200).send(result);
+      }
+    );
+  });
+});
 app.get("/admin/approve", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
@@ -315,48 +412,58 @@ app.get("/admin/approve", (req, res) => {
   });
 });
 
-app.post("/admin/approve:id", (req, res) => {
+app.get("/admin/documents/:id", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
     if (!token.isAdmin) return res.status(403).send("Not Admin");
     const id = req.params.id;
-    db.query("select * from marriages where id = ?", [id], (err, result) => {
-      if (err) throw err;
-      if (result.length === 0) {
-        return res.status(400).send("Marriage not found");
+    db.query(
+      "select document as name from documents where marriage_id = ?",
+      [id],
+      (err, result) => {
+        if (err) throw err;
+        res.status(200).send(result);
       }
-
-      db.query(
-        "update marriages set status = 'active' where id = ?",
-        [id],
-        (err, result) => {
-          if (err) throw err;
-          db.query(
-            "delete from requests where (sender_nid = ? and reciever_nid = ?) or (reciever_nid = ? and sender_nid = ?)",
-            [
-              result[0].husband,
-              result[0].wife,
-              result[0].husband,
-              result[0].wife,
-            ],
-            (err, result) => {
-              if (err) throw err;
-              res.status(200).send("Approved");
-            }
-          );
-        }
-      );
-    });
+    );
   });
 });
 
-app.post("/admin/reject:id", (req, res) => {
+app.post("/admin/approve", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
     if (!token.isAdmin) return res.status(403).send("Not Admin");
-    const id = req.params.id;
+    const id = req.body.id;
+    const nid = token.nid;
+    db.query(
+      "select * from marriages where id = ? and status = 'unapproved'",
+      [id],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res.status(400).send("Marriage not found");
+        }
+
+        db.query(
+          "update marriages set status = 'active', approved_by = ? where id = ?",
+          [nid, id],
+          (err, ress) => {
+            if (err) throw err;
+            res.status(200).send("Approved");
+          }
+        );
+      }
+    );
+  });
+});
+
+app.post("/admin/reject", (req, res) => {
+  const token = req.header("token");
+  jwt.verify(token, jwt_secret, (err, token) => {
+    if (err) return res.status(403).send("Invalid Token");
+    if (!token.isAdmin) return res.status(403).send("Not Admin");
+    const id = req.body.id;
     db.query("select * from marriages where id = ?", [id], (err, result) => {
       if (err) throw err;
       if (result.length === 0) {
@@ -364,8 +471,8 @@ app.post("/admin/reject:id", (req, res) => {
       }
 
       db.query(
-        "update marriages set status = 'rejected' where id = ?",
-        [id],
+        "update marriages set status = 'rejected', approved_by = ? where id = ?",
+        [token.nid, id],
         (err, result) => {
           if (err) throw err;
           res.status(200).send("Marriage Rejected");
@@ -375,39 +482,51 @@ app.post("/admin/reject:id", (req, res) => {
   });
 });
 
-app.post("/admin/divorce:id", (req, res) => {
+app.post("/admin/divorce", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
     if (!token.isAdmin) return res.status(403).send("Not Admin");
-    const id = req.params.id;
-    db.query("select * from marriages where id = ?", [id], (err, result) => {
-      if (err) throw err;
-      if (result.length === 0) {
-        return res.status(400).send("Marriage not found");
-      }
-      db.query(
-        'update marriages set status = "divorced" where id = ?',
-        [id],
-        (err, result) => {
-          if (err) throw err;
-          res.status(200).send("Divorced");
+    const id = req.body.id;
+    db.query(
+      "select * from marriages where id = ? and status = 'active'",
+      [id],
+      (err, result) => {
+        if (err) throw err;
+        if (result.length === 0) {
+          return res
+            .status(400)
+            .send("Marriage not found or is already divorced");
         }
-      );
-    });
+        db.query(
+          'update marriages set status = "divorced", approved_by = ? where id = ?',
+          [token.nid, id],
+          (err, result) => {
+            if (err) throw err;
+            res.status(200).send("Divorced");
+          }
+        );
+      }
+    );
   });
 });
 
-app.get("/admin/marriages", (req, res) => {
+app.post("/admin/marriages", (req, res) => {
   const token = req.header("token");
   jwt.verify(token, jwt_secret, (err, token) => {
     if (err) return res.status(403).send("Invalid Token");
     if (!token.isAdmin) return res.status(403).send("Not Admin");
+    const husband = req.body.husband;
+    const wife = req.body.wife;
     db.query(
-      "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid",
+      "select marriages.id,marriages.date,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.husband = ? and marriages.wife = ?",
+      [husband, wife],
       (err, result) => {
         if (err) throw err;
-        res.status(200).send(result);
+        if (result.length === 0) {
+          return res.status(400).send("Marriage not found");
+        }
+        res.status(200).send(result[0]);
       }
     );
   });
@@ -420,7 +539,7 @@ app.get("/marriages", (req, res) => {
     const nid = token.nid;
     if (token.isMale) {
       db.query(
-        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.husband = ?",
+        "select marriages.id, marriages.date, marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.husband = ?",
         [nid],
         (err, result) => {
           if (err) throw err;
@@ -430,7 +549,7 @@ app.get("/marriages", (req, res) => {
       );
     } else {
       db.query(
-        "select marriages.id,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.wife = ?",
+        "select marriages.id, marriages.date,marriages.husband,marriages.wife,marriages.status,users1.name as husband_name,users2.name as wife_name from marriages inner join users as users1 on marriages.husband = users1.nid inner join users as users2 on marriages.wife = users2.nid where marriages.wife = ?",
         [nid],
         (err, result) => {
           if (err) throw err;
