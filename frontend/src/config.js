@@ -1,2 +1,2 @@
-const baseURL = "https://api.khawajahawak.tech/marriage";
+const baseURL = "https://localhost:3001";
 export default baseURL;
