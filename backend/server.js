@@ -23,9 +23,9 @@ const uploads = multer({
 
 const db = mysql.createConnection({
   host: "localhost",
-  user: "root",
+  user: "marriage",
   password: "password",
-  database: "app",
+  database: "marriage",
 });
 
 app.use("/uploads", express.static(__dirname + "/uploads"));
@@ -128,7 +128,7 @@ app.post("/auth/register", (req, res) => {
                 name,
                 email,
                 isMale,
-                isAdmin: false,
+                isAdmin: true,
               },
               jwt_secret
             );
